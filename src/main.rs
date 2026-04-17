@@ -1,71 +1,87 @@
-use clap::{Parser, Subcommand};
-use colored::Colorize;
 use std::process::Command;
+use clap::Parser;
+use serde::{Serialize, Deserialize};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
+#[command(name = "android-device-info")]
+#[command(about = "Fast Android device info via ADB", long_about = None)]
 struct Args {
-    #[command(subcommand)]
-    command: Commands,
+    #[arg(short, long)]
+    json: bool,
+    #[arg(short, long)]
+    battery: bool,
+    #[arg(short, long)]
+    storage: bool,
+    #[arg(short, long)]
+    network: bool,
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    Info,
-    Model,
-    AndroidVersion,
-    Properties { #[arg(long)] filter: Option<String> },
-    Json,
+#[derive(Serialize, Deserialize, Debug)]
+struct DeviceInfo {
+    model: String,
+    android_version: String,
+    api_level: String,
+    serial: String,
+    battery_level: u32,
+    battery_temp: u32,
+    storage_total: String,
+    storage_available: String,
+    ram_total: String,
+    cpu_cores: String,
 }
 
 fn adb(cmd: &str) -> String {
-    let output = Command::new("adb")
+    Command::new("adb")
         .args(&["shell", cmd])
         .output()
-        .expect("Failed to run adb");
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
-fn getprop(key: &str) -> String {
-    adb(&format!("getprop {}", key))
+fn get_prop(prop: &str) -> String {
+    adb(&format!("getprop {}", prop))
 }
 
 fn main() {
     let args = Args::parse();
 
-    match args.command {
-        Commands::Info => {
-            println!("{}", "📱 Android Device Info".cyan().bold());
-            println!("{}", "─".repeat(40).dimmed());
-            println!("{:<20} {}", "Model:".bold(), getprop("ro.product.model"));
-            println!("{:<20} {}", "Brand:".bold(), getprop("ro.product.brand"));
-            println!("{:<20} {}", "Android:".bold(), getprop("ro.build.version.release"));
-            println!("{:<20} {}", "API Level:".bold(), getprop("ro.build.version.sdk"));
-            println!("{:<20} {}", "Codename:".bold(), getprop("ro.product.device"));
-            println!("{:<20} {}", "CPU ABI:".bold(), getprop("ro.product.cpu.abi"));
-            println!("{:<20} {}", "Fingerprint:".bold(), getprop("ro.build.fingerprint"));
-        }
-        Commands::Model => println!("{}", getprop("ro.product.model")),
-        Commands::AndroidVersion => println!("{}", getprop("ro.build.version.release")),
-        Commands::Properties { filter } => {
-            let props = adb("getprop");
-            for line in props.lines() {
-                if let Some(ref f) = filter {
-                    if line.to_lowercase().contains(&f.to_lowercase()) {
-                        println!("{}", line.dimmed());
-                    }
-                } else {
-                    println!("{}", line.dimmed());
-                }
-            }
-        }
-        Commands::Json => {
-            let model = getprop("ro.product.model");
-            let android = getprop("ro.build.version.release");
-            let json = format!(
-                r#"{{"model":"{}","android":"{}","api":"{}","brand":"{}"}}"#,
-                model, android, getprop("ro.build.version.sdk"), getprop("ro.product.brand")
-            );
-            println!("{}", json);
-        }
+    let info = DeviceInfo {
+        model: get_prop("ro.product.model"),
+        android_version: get_prop("ro.build.version.release"),
+        api_level: get_prop("ro.build.version.sdk"),
+        serial: adb("getprop ro.serialno"),
+        battery_level: adb("dumpsys battery | grep level")
+            .split('=')
+            .last()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0),
+        battery_temp: adb("dumpsys battery | grep temperature")
+            .split('=')
+            .last()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0),
+        storage_total: adb("df /data | tail -1 | awk '{print $2}'"),
+        storage_available: adb("df /data | tail -1 | awk '{print $4}'"),
+        ram_total: adb("cat /proc/meminfo | grep MemTotal | awk '{print $2}'"),
+        cpu_cores: adb("nproc"),
+    };
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&info).unwrap());
+    } else {
+        println!("\n📱 Android Device Info");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("  Model:      {}", info.model);
+        println!("  Android:    {}", info.android_version);
+        println!("  API:        {}", info.api_level);
+        println!("  Serial:     {}", info.serial);
+        println!("  Battery:    {}% ({}°C)", info.battery_level, info.battery_temp);
+        println!("  Storage:    {} / {}", info.storage_available, info.storage_total);
+        println!("  RAM:        {}", info.ram_total);
+        println!("  CPU cores:  {}", info.cpu_cores);
+        println!();
     }
 }
