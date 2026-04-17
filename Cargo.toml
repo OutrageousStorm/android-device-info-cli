@@ -1,0 +1,14 @@
+[package]
+name = "adi"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "adi"
+path = "src/main.rs"
+
+[dependencies]
+subprocess = "0.2"
+json = "0.12"
+clap = { version = "4.0", features = ["derive"] }
+colored = "2.0"
